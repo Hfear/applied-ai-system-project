@@ -19,11 +19,20 @@ class DocuBot:
         self.docs_folder = docs_folder
         self.llm_client = llm_client
 
+        #lists of common stop words to ignore in retrieval scoring (can be expanded)
+        self.stop_words = {
+        "is", "there", "any", "of", "the", "a", "an", "in", "to", 
+        "and", "or", "how", "do", "i", "where", "what", "which", 
+        "when", "was", "are", "it", "this", "that", "for", "with",
+        "my", "we", "be", "at", "by", "from", "on", "not", "if"
+        }
+
         # Load documents into memory
         self.documents = self.load_documents()  # List of (filename, text)
 
         # Build a retrieval index (implemented in Phase 1)
         self.index = self.build_index(self.documents)
+
 
     # -----------------------------------------------------------
     # Document Loading
@@ -70,15 +79,21 @@ class DocuBot:
         doc_words = [w.lower().strip('.,!?:;()\'"[]{}') for w in text.split()]
         
         # Build a frequency map of how many times each word appears in the doc
+        # Skip stop words as they appear everywhere and inflate scores unhelpfully
         freq_map = {}
         for word in doc_words:
+            if word in self.stop_words:
+                continue
             if word not in freq_map:
                 freq_map[word] = 0
             freq_map[word] += 1
         
         # For each query word, add its frequency in the doc to the total score
+        # Skip stop words in the query too so they don't affect scoring
         score = 0
         for word in query_words:
+            if word in self.stop_words:
+                continue
             if word in freq_map:
                 score += freq_map[word]
         
@@ -102,10 +117,11 @@ class DocuBot:
         # Sort all paragraphs by score, highest first
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Return top_k paragraphs as (filename, text, score) tuples, skipping zero scores
+        # Return top_k paragraphs, skipping anything scoring below 3
+        # Score below 3 means too few meaningful word matches to be reliable
         results = []
         for score, filename, paragraph in scored[:top_k]:
-            if score > 0:
+            if score >= 3:
                 # Include score so answer_retrieval_only can evaluate confidence
                 results.append((filename, paragraph, score))
         
