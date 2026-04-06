@@ -76,7 +76,7 @@ class GeminiClient:
             return "I do not know based on the docs I have."
 
         context_blocks = []
-        for filename, text in snippets:
+        for filename, text, score in snippets:
             block = f"File: {filename}\n{text}\n"
             context_blocks.append(block)
 
@@ -100,11 +100,12 @@ Developer question:
 {query}
 
 Rules:
-- Use only the information in the snippets. Do not invent new functions,
-  endpoints, or configuration values.
-- If the snippets are not enough to answer confidently, reply exactly:
-  "I do not know based on the docs I have."
-- When you do answer, briefly mention which files you relied on.
+- Answer using only the information in the snippets provided.
+- Do not invent new functions, endpoints, or configuration values.
+- If and only if the snippets contain absolutely no relevant information,
+  reply exactly: "I do not know based on the docs I have."
+- If the snippets contain even partial relevant information, use it to answer.
+- Keep your answer concise and mention which file you relied on.
 """
 
         response = self.model.generate_content(prompt)

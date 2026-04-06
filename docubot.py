@@ -21,10 +21,16 @@ class DocuBot:
 
         #lists of common stop words to ignore in retrieval scoring (can be expanded)
         self.stop_words = {
-        "is", "there", "any", "of", "the", "a", "an", "in", "to", 
-        "and", "or", "how", "do", "i", "where", "what", "which", 
+        "is", "there", "any", "of", "the", "a", "an", "in", "to",
+        "and", "or", "how", "do", "i", "where", "what", "which",
         "when", "was", "are", "it", "this", "that", "for", "with",
-        "my", "we", "be", "at", "by", "from", "on", "not", "if"
+        "my", "we", "be", "at", "by", "from", "on", "not", "if",
+        "are", "were", "been", "being", "have", "has", "had",
+        "does", "did", "will", "would", "could", "should", "may",
+        "might", "can", "shall", "its", "these", "those", "you",
+        "he", "she", "they", "your", "his", "her", "our", "their",
+        "so", "than", "as", "into", "through", "during", "before",
+        "after", "no", "but"
         }
 
         # Load documents into memory
@@ -61,7 +67,7 @@ class DocuBot:
         index = {}
         for filename, text in documents:
             for word in text.split():
-                word = word.lower().strip('.,!?:;()\'"[]{}')
+                word = word.lower().strip('.,!?:;()\'"[]{}``')
                 if word not in index:
                     index[word] = []
                 if filename not in index[word]:
@@ -72,35 +78,33 @@ class DocuBot:
         # -----------------------------------------------------------
 
     def score_document(self, query, text):
-        # Split query into words, lowercase and strip punctuation from each
-        query_words = [w.lower().strip('.,!?:;()\'"[]{}') for w in query.split()]
-        
-        # Split document text into words, lowercase and strip punctuation from each
-        doc_words = [w.lower().strip('.,!?:;()\'"[]{}') for w in text.split()]
-        
-        # Build a frequency map of how many times each word appears in the doc
-        # Skip stop words as they appear everywhere and inflate scores unhelpfully
-        freq_map = {}
-        for word in doc_words:
-            if word in self.stop_words:
-                continue
-            if word not in freq_map:
-                freq_map[word] = 0
-            freq_map[word] += 1
-        
-        # For each query word, add its frequency in the doc to the total score
-        # Skip stop words in the query too so they don't affect scoring
+        # Clean and split query into unique meaningful words, skipping stop words
+        query_words = set(
+            w.lower().strip('.,!?:;()\'"[]{}``')
+            for w in query.split()
+            if w.lower() not in self.stop_words
+        )
+
+        # Clean and split document text into unique words
+        text_words = set(
+            w.lower().strip('.,!?:;()\'"[]{}``')
+            for w in text.split()
+        )
+
+        # Score = number of query words that have at least one prefix match in the paragraph.
+        # One direction only: text_word.startswith(query_word).
+        # This handles stemming gaps ("token"→"tokens", "generate"→"generated", "auth"→"auth_utils")
+        # without the false positives caused by the reverse check ("to" matching "token").
         score = 0
-        for word in query_words:
-            if word in self.stop_words:
-                continue
-            if word in freq_map:
-                score += freq_map[word]
-        
-        # Higher score = more relevant to the query
+        for query_word in query_words:
+            for text_word in text_words:
+                if text_word.startswith(query_word):
+                    score += 1
+                    break  # only count each query word once even if multiple text words match
+
         return score
     
-    def retrieve(self, query, top_k=3):
+    def retrieve(self, query, top_k=5):
         # Score every paragraph from every document against the query
         scored = []
         for filename, text in self.documents:
@@ -117,11 +121,11 @@ class DocuBot:
         # Sort all paragraphs by score, highest first
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Return top_k paragraphs, skipping anything scoring below 3
-        # Score below 3 means too few meaningful word matches to be reliable
+        # Return top_k paragraphs, skipping anything scoring below 2
+        # Score of 1 means only one query term matched — too noisy to be useful.
         results = []
         for score, filename, paragraph in scored[:top_k]:
-            if score >= 3:
+            if score >= 2:
                 # Include score so answer_retrieval_only can evaluate confidence
                 results.append((filename, paragraph, score))
         
@@ -131,7 +135,7 @@ class DocuBot:
     # Answering Modes
     # -----------------------------------------------------------
 
-    def answer_retrieval_only(self, query, top_k=3):
+    def answer_retrieval_only(self, query, top_k=5):
         snippets = self.retrieve(query, top_k=top_k)
 
         # No results at all — outright refuse
@@ -140,11 +144,13 @@ class DocuBot:
 
         formatted = []
         for filename, text, score in snippets:
-            # Low confidence warning for scores below 5
-            if score < 5:
-                confidence_note = f"⚠️  Low confidence (score: {score}) — answer may be inaccurate"
+            # Low confidence warning for scores below 2
+            # With set-based scoring, max score = unique meaningful query terms,
+            # so a score of 1 means only one term matched — low confidence.
+            if score < 2:
+                confidence_note = f"[LOW] Low confidence (score: {score}) — answer may be inaccurate"
             else:
-                confidence_note = f"✓ Confidence score: {score}"
+                confidence_note = f"[OK] Confidence score: {score}"
 
             # Format each snippet with its filename and confidence note
             formatted.append(f"[{filename}] {confidence_note}\n{text}\n")
