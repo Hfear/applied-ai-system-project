@@ -102,33 +102,39 @@ class DocuBot:
         # Sort all paragraphs by score, highest first
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Return top_k paragraphs as (filename, text) tuples, skipping zero scores
+        # Return top_k paragraphs as (filename, text, score) tuples, skipping zero scores
         results = []
         for score, filename, paragraph in scored[:top_k]:
             if score > 0:
-                results.append((filename, paragraph))
+                # Include score so answer_retrieval_only can evaluate confidence
+                results.append((filename, paragraph, score))
         
         return results
-    
+        
     # -----------------------------------------------------------
     # Answering Modes
     # -----------------------------------------------------------
 
     def answer_retrieval_only(self, query, top_k=3):
-        """
-        Phase 1 retrieval only mode.
-        Returns raw snippets and filenames with no LLM involved.
-        """
         snippets = self.retrieve(query, top_k=top_k)
 
+        # No results at all — outright refuse
         if not snippets:
             return "I do not know based on these docs."
 
         formatted = []
-        for filename, text in snippets:
-            formatted.append(f"[{filename}]\n{text}\n")
+        for filename, text, score in snippets:
+            # Low confidence warning for scores below 5
+            if score < 5:
+                confidence_note = f"⚠️  Low confidence (score: {score}) — answer may be inaccurate"
+            else:
+                confidence_note = f"✓ Confidence score: {score}"
+
+            # Format each snippet with its filename and confidence note
+            formatted.append(f"[{filename}] {confidence_note}\n{text}\n")
 
         return "\n---\n".join(formatted)
+
 
     def answer_rag(self, query, top_k=3):
         """
