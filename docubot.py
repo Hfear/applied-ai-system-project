@@ -86,22 +86,30 @@ class DocuBot:
         return score
     
     def retrieve(self, query, top_k=3):
-        # Score every document against the query
+        # Score every paragraph from every document against the query
         scored = []
         for filename, text in self.documents:
-            score = self.score_document(query, text)
-            scored.append((score, filename, text))
+            # Split the document into paragraphs on blank lines
+            paragraphs = text.split('\n\n')
+            for paragraph in paragraphs:
+                # Skip paragraphs that are too short to be meaningful
+                if len(paragraph.strip()) < 20:
+                    continue
+                # Score this paragraph against the query
+                score = self.score_document(query, paragraph)
+                scored.append((score, filename, paragraph))
         
-        # Sort by score, highest first
+        # Sort all paragraphs by score, highest first
         scored.sort(key=lambda x: x[0], reverse=True)
         
-        # Return top_k results as (filename, text) tuples, skipping zero scores
+        # Return top_k paragraphs as (filename, text) tuples, skipping zero scores
         results = []
-        for score, filename, text in scored[:top_k]:
+        for score, filename, paragraph in scored[:top_k]:
             if score > 0:
-                results.append((filename, text))
+                results.append((filename, paragraph))
         
         return results
+    
     # -----------------------------------------------------------
     # Answering Modes
     # -----------------------------------------------------------
