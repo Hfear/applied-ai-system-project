@@ -49,52 +49,59 @@ class DocuBot:
     # -----------------------------------------------------------
 
     def build_index(self, documents):
-        """
-        TODO (Phase 1):
-        Build a tiny inverted index mapping lowercase words to the documents
-        they appear in.
-
-        Example structure:
-        {
-            "token": ["AUTH.md", "API_REFERENCE.md"],
-            "database": ["DATABASE.md"]
-        }
-
-        Keep this simple: split on whitespace, lowercase tokens,
-        ignore punctuation if needed.
-        """
         index = {}
-        # TODO: implement simple indexing
+        for filename, text in documents:
+            for word in text.split():
+                word = word.lower().strip('.,!?:;()\'"[]{}')
+                if word not in index:
+                    index[word] = []
+                if filename not in index[word]:
+                    index[word].append(filename)
         return index
-
-    # -----------------------------------------------------------
-    # Scoring and Retrieval (Phase 1)
-    # -----------------------------------------------------------
+        # -----------------------------------------------------------
+        # Scoring and Retrieval (Phase 1)
+        # -----------------------------------------------------------
 
     def score_document(self, query, text):
-        """
-        TODO (Phase 1):
-        Return a simple relevance score for how well the text matches the query.
-
-        Suggested baseline:
-        - Convert query into lowercase words
-        - Count how many appear in the text
-        - Return the count as the score
-        """
-        # TODO: implement scoring
-        return 0
-
+        # Split query into words, lowercase and strip punctuation from each
+        query_words = [w.lower().strip('.,!?:;()\'"[]{}') for w in query.split()]
+        
+        # Split document text into words, lowercase and strip punctuation from each
+        doc_words = [w.lower().strip('.,!?:;()\'"[]{}') for w in text.split()]
+        
+        # Build a frequency map of how many times each word appears in the doc
+        freq_map = {}
+        for word in doc_words:
+            if word not in freq_map:
+                freq_map[word] = 0
+            freq_map[word] += 1
+        
+        # For each query word, add its frequency in the doc to the total score
+        score = 0
+        for word in query_words:
+            if word in freq_map:
+                score += freq_map[word]
+        
+        # Higher score = more relevant to the query
+        return score
+    
     def retrieve(self, query, top_k=3):
-        """
-        TODO (Phase 1):
-        Use the index and scoring function to select top_k relevant document snippets.
-
-        Return a list of (filename, text) sorted by score descending.
-        """
+        # Score every document against the query
+        scored = []
+        for filename, text in self.documents:
+            score = self.score_document(query, text)
+            scored.append((score, filename, text))
+        
+        # Sort by score, highest first
+        scored.sort(key=lambda x: x[0], reverse=True)
+        
+        # Return top_k results as (filename, text) tuples, skipping zero scores
         results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
-
+        for score, filename, text in scored[:top_k]:
+            if score > 0:
+                results.append((filename, text))
+        
+        return results
     # -----------------------------------------------------------
     # Answering Modes
     # -----------------------------------------------------------
