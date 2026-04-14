@@ -34,5 +34,13 @@ def log_answer(answer: str) -> None:
     _logger.info("ANSWER: %s...", preview)
 
 
+def log_themes(themes: list) -> None:
+    _logger.info("THEMES: %s", ", ".join(themes))
+
+
+def log_argument_analysis(claim: str) -> None:
+    _logger.info("ARGUMENT ANALYSIS for claim: %s", claim)
+
+
 def log_error(context: str, error: Exception) -> None:
     _logger.error("ERROR in %s: %s", context, error)
