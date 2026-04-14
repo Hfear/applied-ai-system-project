@@ -1,70 +1,129 @@
 """
-Core DocuBot class responsible for:
-- Loading documents from the docs/ folder
-- Building a simple retrieval index (Phase 1)
-- Retrieving relevant snippets (Phase 1)
-- Supporting retrieval only answers
-- Supporting RAG answers when paired with Gemini (Phase 2)
+DocuBot Article Analyser — core engine.
+
+Responsibilities:
+- Accept documents directly (from Streamlit uploads) or load from articles_folder
+- Build a word-level retrieval index
+- Score and retrieve relevant paragraphs
+- Expand queries via Gemini (query expansion step)
+- Synthesise cited answers via Gemini (synthesis step)
+- Log all activity via logger.py
 """
+
+from __future__ import annotations
 
 import os
 import glob
+import logger as _logger_module
+
+
+STOP_WORDS = {
+    "is", "there", "any", "of", "the", "a", "an", "in", "to",
+    "and", "or", "how", "do", "i", "where", "what", "which",
+    "when", "was", "are", "it", "this", "that", "for", "with",
+    "my", "we", "be", "at", "by", "from", "on", "not", "if",
+    "are", "were", "been", "being", "have", "has", "had",
+    "does", "did", "will", "would", "could", "should", "may",
+    "might", "can", "shall", "its", "these", "those", "you",
+    "he", "she", "they", "your", "his", "her", "our", "their",
+    "so", "than", "as", "into", "through", "during", "before",
+    "after", "no", "but",
+}
+
+SYNTHESIS_PROMPT_TEMPLATE = """\
+You are a research assistant that answers questions using only the article excerpts provided.
+
+Your job:
+1. Write a short cited summary (3-5 sentences) answering the question.
+   After each claim, cite the source in brackets e.g. [Source 1].
+2. End with a "Key Quotes" section with 2-3 direct quotes, each attributed to its source.
+
+Rules:
+- Only use information from the excerpts. Do not add outside knowledge.
+- If excerpts lack enough information, say exactly:
+  "The available articles do not contain enough information to answer this question."
+
+Article excerpts:
+{context}
+
+Question: {query}
+
+Format:
+Summary:
+[cited summary]
+
+Key Quotes:
+- "[quote]" — [Source N: Title]
+- "[quote]" — [Source N: Title]
+"""
+
 
 class DocuBot:
-    def __init__(self, docs_folder="docs", llm_client=None):
-        """
-        docs_folder: directory containing project documentation files
-        llm_client: optional Gemini client for LLM based answers
-        """
-        self.docs_folder = docs_folder
+    """
+    Article Analyser engine.
+
+    Parameters
+    ----------
+    documents:
+        Optional list of (filename, text) tuples provided directly
+        (e.g. from Streamlit file uploads).  When supplied, articles_folder
+        is ignored.
+    articles_folder:
+        Directory to load .txt/.md files from when documents is not provided.
+    llm_client:
+        An instance of GeminiClient (or compatible).  Required for query
+        expansion and synthesis; if None the system falls back to
+        retrieval-only mode.
+    """
+
+    def __init__(
+        self,
+        documents: list[tuple[str, str]] | None = None,
+        articles_folder: str = "articles",
+        llm_client=None,
+    ):
+        self.articles_folder = articles_folder
         self.llm_client = llm_client
 
-        #lists of common stop words to ignore in retrieval scoring (can be expanded)
-        self.stop_words = {
-        "is", "there", "any", "of", "the", "a", "an", "in", "to",
-        "and", "or", "how", "do", "i", "where", "what", "which",
-        "when", "was", "are", "it", "this", "that", "for", "with",
-        "my", "we", "be", "at", "by", "from", "on", "not", "if",
-        "are", "were", "been", "being", "have", "has", "had",
-        "does", "did", "will", "would", "could", "should", "may",
-        "might", "can", "shall", "its", "these", "those", "you",
-        "he", "she", "they", "your", "his", "her", "our", "their",
-        "so", "than", "as", "into", "through", "during", "before",
-        "after", "no", "but"
-        }
+        if documents:
+            self.documents = documents
+        else:
+            self.documents = self._load_articles()
 
-        # Load documents into memory
-        self.documents = self.load_documents()  # List of (filename, text)
+        if not self.documents:
+            import warnings
+            warnings.warn(
+                "DocuBot initialised with no documents. "
+                "Upload files or populate the articles/ folder.",
+                stacklevel=2,
+            )
 
-        # Build a retrieval index (implemented in Phase 1)
-        self.index = self.build_index(self.documents)
+        self.index = self._build_index(self.documents)
 
+    # ------------------------------------------------------------------
+    # Document loading
+    # ------------------------------------------------------------------
 
-    # -----------------------------------------------------------
-    # Document Loading
-    # -----------------------------------------------------------
-
-    def load_documents(self):
-        """
-        Loads all .md and .txt files inside docs_folder.
-        Returns a list of tuples: (filename, text)
-        """
-        docs = []
-        pattern = os.path.join(self.docs_folder, "*.*")
+    def _load_articles(self) -> list[tuple[str, str]]:
+        """Load .txt and .md files from articles_folder."""
+        docs: list[tuple[str, str]] = []
+        pattern = os.path.join(self.articles_folder, "*.*")
         for path in glob.glob(pattern):
             if path.endswith(".md") or path.endswith(".txt"):
-                with open(path, "r", encoding="utf8") as f:
-                    text = f.read()
-                filename = os.path.basename(path)
-                docs.append((filename, text))
+                try:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        text = fh.read()
+                    docs.append((os.path.basename(path), text))
+                except OSError as exc:
+                    _logger_module.log_error("_load_articles", exc)
         return docs
 
-    # -----------------------------------------------------------
-    # Index Construction (Phase 1)
-    # -----------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Index construction
+    # ------------------------------------------------------------------
 
-    def build_index(self, documents):
-        index = {}
+    def _build_index(self, documents: list[tuple[str, str]]) -> dict:
+        index: dict[str, list[str]] = {}
         for filename, text in documents:
             for word in text.split():
                 word = word.lower().strip('.,!?:;()\'"[]{}``')
@@ -73,116 +132,161 @@ class DocuBot:
                 if filename not in index[word]:
                     index[word].append(filename)
         return index
-        # -----------------------------------------------------------
-        # Scoring and Retrieval (Phase 1)
-        # -----------------------------------------------------------
 
-    def score_document(self, query, text):
-        # Clean and split query into unique meaningful words, skipping stop words
-        query_words = set(
+    # ------------------------------------------------------------------
+    # Scoring
+    # ------------------------------------------------------------------
+
+    def _score_paragraph(self, query: str, text: str) -> int:
+        """
+        Prefix-match scoring.  Each unique query term (excluding stop words)
+        that matches any word in the text via startswith() adds 1 to the score.
+        """
+        query_words = {
             w.lower().strip('.,!?:;()\'"[]{}``')
             for w in query.split()
-            if w.lower() not in self.stop_words
-        )
-
-        # Clean and split document text into unique words
-        text_words = set(
+            if w.lower() not in STOP_WORDS
+        }
+        text_words = {
             w.lower().strip('.,!?:;()\'"[]{}``')
             for w in text.split()
-        )
-
-        # Score = number of query words that have at least one prefix match in the paragraph.
-        # One direction only: text_word.startswith(query_word).
-        # This handles stemming gaps ("token"→"tokens", "generate"→"generated", "auth"→"auth_utils")
-        # without the false positives caused by the reverse check ("to" matching "token").
+        }
         score = 0
-        for query_word in query_words:
-            for text_word in text_words:
-                if text_word.startswith(query_word):
+        for qw in query_words:
+            for tw in text_words:
+                if tw.startswith(qw):
                     score += 1
-                    break  # only count each query word once even if multiple text words match
-
+                    break
         return score
-    
-    def retrieve(self, query, top_k=5):
-        # Score every paragraph from every document against the query
-        scored = []
+
+    # ------------------------------------------------------------------
+    # Retrieval
+    # ------------------------------------------------------------------
+
+    def retrieve(
+        self, query: str, top_k: int = 5
+    ) -> list[tuple[str, str, int]]:
+        """
+        Split every document into paragraphs, score each one, return the
+        top_k with score >= 2 as (filename, paragraph, score) tuples.
+        """
+        scored: list[tuple[int, str, str]] = []
         for filename, text in self.documents:
-            # Split the document into paragraphs on blank lines
-            paragraphs = text.split('\n\n')
-            for paragraph in paragraphs:
-                # Skip paragraphs that are too short to be meaningful
+            for paragraph in text.split("\n\n"):
                 if len(paragraph.strip()) < 20:
                     continue
-                # Score this paragraph against the query
-                score = self.score_document(query, paragraph)
+                score = self._score_paragraph(query, paragraph)
                 scored.append((score, filename, paragraph))
-        
-        # Sort all paragraphs by score, highest first
+
         scored.sort(key=lambda x: x[0], reverse=True)
-        
-        # Return top_k paragraphs, skipping anything scoring below 2
-        # Score of 1 means only one query term matched — too noisy to be useful.
+
         results = []
         for score, filename, paragraph in scored[:top_k]:
             if score >= 2:
-                # Include score so answer_retrieval_only can evaluate confidence
                 results.append((filename, paragraph, score))
-        
         return results
-        
-    # -----------------------------------------------------------
-    # Answering Modes
-    # -----------------------------------------------------------
 
-    def answer_retrieval_only(self, query, top_k=5):
-        snippets = self.retrieve(query, top_k=top_k)
+    # ------------------------------------------------------------------
+    # Query expansion
+    # ------------------------------------------------------------------
 
-        # No results at all — outright refuse
-        if not snippets:
-            return "I do not know based on these docs."
-
-        formatted = []
-        for filename, text, score in snippets:
-            # Low confidence warning for scores below 2
-            # With set-based scoring, max score = unique meaningful query terms,
-            # so a score of 1 means only one term matched — low confidence.
-            if score < 2:
-                confidence_note = f"[LOW] Low confidence (score: {score}) — answer may be inaccurate"
-            else:
-                confidence_note = f"[OK] Confidence score: {score}"
-
-            # Format each snippet with its filename and confidence note
-            formatted.append(f"[{filename}] {confidence_note}\n{text}\n")
-
-        return "\n---\n".join(formatted)
-
-
-    def answer_rag(self, query, top_k=3):
+    def expand_query(self, query: str) -> tuple[str, list[str]]:
         """
-        Phase 2 RAG mode.
-        Uses student retrieval to select snippets, then asks Gemini
-        to generate an answer using only those snippets.
+        Ask Gemini for 3-4 related search terms to broaden retrieval.
+
+        Returns (expanded_query_string, list_of_extra_terms).
+        Falls back to (original_query, []) if the LLM is unavailable.
         """
         if self.llm_client is None:
-            raise RuntimeError(
-                "RAG mode requires an LLM client. Provide a GeminiClient instance."
-            )
+            return query, []
 
-        snippets = self.retrieve(query, top_k=top_k)
+        prompt = (
+            "Given this research question, generate 3-4 related search terms "
+            "that would help find relevant passages. Return only the terms as "
+            "a comma-separated list.\n"
+            f"Question: {query}"
+        )
+        try:
+            raw = self.llm_client.generate(prompt)
+            extra_terms = [t.strip() for t in raw.split(",") if t.strip()]
+            expanded = query + " " + " ".join(extra_terms)
+            return expanded, extra_terms
+        except Exception as exc:
+            _logger_module.log_error("expand_query", exc)
+            return query, []
+
+    # ------------------------------------------------------------------
+    # Main public method
+    # ------------------------------------------------------------------
+
+    def synthesise(self, query: str, snippets: list[tuple[str, str, int]]) -> str:
+        """
+        Build context from retrieved snippets and call Gemini to produce a
+        cited summary + Key Quotes section.
+
+        Falls back to showing raw passages if the LLM is unavailable.
+        """
+        context_blocks = []
+        for i, (filename, text, _) in enumerate(snippets, start=1):
+            context_blocks.append(f"[Source {i}: {filename}]\n{text}")
+        context = "\n\n".join(context_blocks)
+
+        if self.llm_client is not None:
+            synthesis_prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
+                context=context, query=query
+            )
+            try:
+                answer = self.llm_client.generate(synthesis_prompt)
+            except Exception as exc:
+                _logger_module.log_error("synthesise", exc)
+                answer = "⚠️ Gemini unavailable — showing raw passages:\n\n" + context
+        else:
+            answer = "⚠️ No LLM configured — showing raw passages:\n\n" + context
+
+        _logger_module.log_answer(answer)
+        return answer
+
+    def answer_with_citations(self, query: str) -> dict:
+        """
+        Full agentic pipeline (convenience wrapper used when all three steps
+        should run without progressive UI display):
+          1. Expand the query (Gemini call 1)
+          2. Retrieve relevant passages
+          3. Synthesise a cited answer (Gemini call 2)
+
+        Returns a dict suitable for Streamlit to inspect:
+        {
+            "expanded_terms": [...],
+            "sources_searched": [...],
+            "passages_found": int,
+            "answer": str,
+        }
+        """
+        _logger_module.log_query("answer_with_citations", query)
+
+        expanded_query, expanded_terms = self.expand_query(query)
+
+        snippets = self.retrieve(expanded_query, top_k=5)
+        _logger_module.log_snippets(snippets)
+
+        sources_searched = list(dict.fromkeys(f for f, _, _ in snippets))
 
         if not snippets:
-            return "I do not know based on these docs."
+            return {
+                "expanded_terms": expanded_terms,
+                "sources_searched": [],
+                "passages_found": 0,
+                "answer": (
+                    "No relevant content found in your articles for this question. "
+                    "Try rephrasing or uploading more sources."
+                ),
+            }
 
-        return self.llm_client.answer_from_snippets(query, snippets)
+        answer = self.synthesise(query, snippets)
 
-    # -----------------------------------------------------------
-    # Bonus Helper: concatenated docs for naive generation mode
-    # -----------------------------------------------------------
-
-    def full_corpus_text(self):
-        """
-        Returns all documents concatenated into a single string.
-        This is used in Phase 0 for naive 'generation only' baselines.
-        """
-        return "\n\n".join(text for _, text in self.documents)
+        return {
+            "expanded_terms": expanded_terms,
+            "sources_searched": sources_searched,
+            "passages_found": len(snippets),
+            "answer": answer,
+        }
