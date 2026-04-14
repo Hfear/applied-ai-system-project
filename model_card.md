@@ -1,166 +1,103 @@
-# DocuBot Model Card
+# Article Analyser Model Card
 
-This model card is a short reflection on your DocuBot system. Fill it out after you have implemented retrieval and experimented with all three modes:
-
-1. Naive LLM over full docs  
-2. Retrieval only  
-3. RAG (retrieval plus LLM)
-
-Use clear, honest descriptions. It is fine if your system is imperfect.
+A reflection on the Article Analyser system — an extension of DocuBot built for the Module 4 final project.
 
 ---
 
 ## 1. System Overview
 
-**What is DocuBot trying to do?**  
-Describe the overall goal in 2 to 3 sentences.
+**What is Article Analyser trying to do?**
 
-DocuBot is an AI used to take in a question and search through documents and return references related to the query. Unlike other AIs, it focuses on the quotes and references in an attempt to stave off hallucinations.
+Article Analyser is an AI research assistant that takes in uploaded articles and answers questions grounded only in those sources. Instead of relying on a model's general knowledge, it retrieves actual passages from the uploaded documents and uses them as evidence before generating any answer.
 
-**What inputs does DocuBot take?**  
-For example: user question, docs in folder, environment variables.
+**What inputs does it take?**
 
-DocuBot takes in documents, an API key, and a text input from the user.
+Uploaded .txt, .md, or .pdf files, a Gemini API key, and a text query from the user.
 
-**What outputs does DocuBot produce?**
+**What outputs does it produce?**
 
- DocuBot returns the top results along with confidence scores and a reliability indicator to help the user judge the answer.
+A cited summary paragraph with inline source references and a Key Quotes section with direct quotes attributed to their source files. If there is not enough evidence, it refuses to answer instead of guessing.
 
 ---
 
 ## 2. Retrieval Design
 
-**How does your retrieval system work?**  
-Describe your choices for indexing and scoring.
+**How does the retrieval system work?**
 
-- How do you turn documents into an index?
-- How do you score relevance for a query?
-- How do you choose top snippets?
+- Documents are split into paragraphs and each word is lowercased and stripped of punctuation
+- A word-level index maps terms to the files they appear in
+- When a query comes in, the system expands it using Gemini to generate 3-4 related search terms
+- Every paragraph across all uploaded files gets scored against the expanded query using prefix matching
+- Stop words are filtered out so common words like "the" and "is" do not inflate scores
+- Top 5 paragraphs with a score of 2 or above get passed to the synthesis agent
 
- - Split documents on whitespace, lowercase everything, strip punctuation
- - Words get mapped to whichever files they appear in, one word can reference multiple files
- - Documents get split into paragraphs so we return focused chunks not whole files
- - Each paragraph gets scored by counting how many unique query words appear in it
- - Stop words like "the", "is", "a" get skipped so they don't inflate scores
- - Top scoring paragraphs get returned with their filename and score
+**What tradeoffs were made?**
 
-**What tradeoffs did you make?**  
-For example: speed vs precision, simplicity vs accuracy.
-
- - Chose unique word matching over frequency map so repetition does not inflate scores, but lost the ability to rank docs that focus heavily on a topic higher
- - Prefix matching handles stemming gaps like token/tokens but can still miss matches or create false ones
- - Score threshold of 2 filters out noise but may block valid low scoring answers
- - Keeping it simple with basic Python means fast and readable code but less accurate than semantic search
+- Query expansion adds a Gemini call before retrieval but measurably improves recall on vague queries — worth the latency
+- Word overlap scoring is fast and transparent but misses semantic matches that embeddings would catch
+- Score threshold of 2 keeps noise out but might filter valid low-scoring answers on niche queries
+- Splitting on paragraph breaks means answers that span two paragraphs can still be missed
 
 ---
 
 ## 3. Use of the LLM (Gemini)
 
-**When does DocuBot call the LLM and when does it not?**  
-Briefly describe how each mode behaves.
+**When does the system call Gemini and when does it not?**
 
-- Naive LLM mode:
-- Retrieval only mode:
-- RAG mode:
+- Query expansion: Gemini is called first to expand the user's search terms before any retrieval happens
+- Synthesis: Gemini is called a second time with only the retrieved passages to write the cited summary
+- Retrieval-only fallback: if no API key is present, Gemini is never called and raw passages are returned directly
 
- - Naive LLM mode: calls Gemini with only the user query, no docs involved
- - Retrieval only mode: never calls the LLM, returns raw paragraphs directly
- - RAG mode: retrieves snippets first then passes only those to Gemini
+**What instructions keep the LLM grounded?**
 
-**What instructions do you give the LLM to keep it grounded?**  
-Summarize the rules from your prompt. For example: only use snippets, say "I do not know" when needed, cite files.
-
- - Only answer using the retrieved snippets
- - Do not invent functions, endpoints, or config values
- - Cite which file the answer came from
- - Say "I do not know based on the docs I have" only if snippets have no relevant information at all
+- Only use information from the retrieved passages
+- Do not add outside knowledge
+- Cite which source each claim came from using inline brackets
+- If the passages do not contain enough information, say exactly "The available articles do not contain enough information to answer this question"
 
 ---
 
-## 4. Experiments and Comparisons
+## 4. Limitations and Biases
 
-Run the **same set of queries** in all three modes. Fill in the table with short notes.
+The system is only as good as what gets uploaded. If the uploaded articles are one-sided or cover only one perspective on a topic, the answers will reflect that without any warning to the user. There is no mechanism to flag when sources are biased or incomplete.
 
-You can reuse or adapt the queries from `dataset.py`.
+Word overlap retrieval also has a language bias — it works best with plain English and struggles with technical jargon, acronyms, or non-English text. A query using different vocabulary than the source document will score low even if the meaning is identical.
 
-| Query | Naive LLM: helpful or harmful? | Retrieval only: helpful or harmful? | RAG: helpful or harmful? | Notes |
-|------|---------------------------------|--------------------------------------|---------------------------|-------|
-| Where is the auth token generated? | Harmful - invented OAuth/Okta, never mentioned generate_access_token | Helpful - found correct paragraph but buried 5th | Partial - answered but cited wrong snippet | Right paragraph tied with irrelevant ones |
-| Which endpoint returns all users? | Harmful - guessed GET /users, docs say GET /api/users | Helpful - top result was exactly right | Partial - found right file but missed exact path | Full endpoint was in a different paragraph |
-| Is there any mention of payment processing? | Harmful - invented payment info in some runs | Helpful - correctly refused | Helpful - correctly refused | Guardrail worked as intended |
-
-**What patterns did you notice?**  
-
-- When does naive LLM look impressive but untrustworthy?  
-- When is retrieval only clearly better?  
-- When is RAG clearly better than both?
-
- - Naive LLM looks impressive on generic questions but dangerous on codebase specific ones, never cites evidence
- - Retrieval only is most trustworthy since every word came directly from the docs but requires user to interpret raw paragraphs
- - RAG is best when retrieval surfaces one clear focused snippet, fails when answer is spread across multiple paragraphs
+Scanned PDFs fail entirely since the parser cannot extract text from image-based documents. The guardrail handles this gracefully but the user might not understand why their file returned no results.
 
 ---
 
-## 5. Failure Cases and Guardrails
+## 5. Misuse and Prevention
 
-**Describe at least two concrete failure cases you observed.**  
-For each one, say:
+Someone could use this system to cherry-pick quotes from articles by uploading only sources that support a particular argument, then presenting the cited summary as if it represents a balanced view. The system has no way to detect this because it only knows about the files it was given.
 
-- What was the question?  
-- What did the system do?  
-- What should have happened instead?
-
- Failure case 1: "Where is the auth token generated?" - retrieved the right paragraph but ranked it 5th, RAG used a less relevant snippet and gave an incomplete answer. It should have ranked the generate_access_token paragraph first and used that as the primary source.
-
- Failure case 2: "Which endpoint returns all users?" - found the description but missed the endpoint path GET /api/users which was in a separate paragraph that was not retrieved. It should have returned both paragraphs together so the full answer was available.
-
-**When should DocuBot say "I do not know based on the docs I have"?**  
-Give at least two specific situations.
-
- - When no paragraph scores above the minimum threshold meaning no meaningful word overlap exists between the query and any documentation
- - When the question is about a topic entirely absent from the docs like payment processing
-
-**What guardrails did you implement?**  
-Examples: refusal rules, thresholds, limits on snippets, safe defaults.
-
- - Score threshold - paragraphs below 2 are never returned
- - Stop word filtering - common words excluded from scoring so they cannot inflate relevance
- - Confidence labels - scores below 5 show a LOW warning so users know to verify
- - LLM refusal instruction - Gemini told to refuse rather than guess when snippets lack relevant info
+To reduce this risk, the UI is transparent about which sources were used for each answer. Users can see exactly which files the passages came from, so anyone reading the output can judge whether the sourcing is representative. Adding a disclaimer to outputs noting that answers reflect only the uploaded sources would be a straightforward future improvement.
 
 ---
 
-## 6. Limitations and Future Improvements
+## 6. Testing Surprises
 
-**Current limitations**  
-List at least three limitations of your DocuBot system.
+The guardrail firing on "is gambling good?" was the most interesting result during testing. The articles contain plenty of content about gambling but the system correctly identified that none of it directly supports a positive framing of the question. That was a better result than expected — it showed the synthesis agent was actually reasoning about the evidence rather than just pattern matching.
 
-1. Scoring based on word overlap only, cannot understand meaning so similar questions with different words retrieve different results
-2. Answers split across multiple paragraphs are often missed since retrieval returns the best single paragraph not a synthesized view
-3. Prefix matching is a rough approximation and can produce false matches between short and unrelated longer words
-
-**Future improvements**  
-List two or three changes that would most improve reliability or usefulness.
-
-1. Use semantic embeddings instead of word overlap to match meaning rather than exact words
-2. Include surrounding paragraphs with each retrieved snippet so answers split across paragraphs are not lost
-3. Add query expansion to automatically add related terms before retrieval to improve recall on technical terminology
+The query expansion also surprised me in a good way. "Is online betting dangerous?" with no expansion returned one weak passage. After expansion to "online betting risks, compulsive gambling, gambling addiction" it returned five strong passages from two different sources. That was the clearest demonstration that the agentic step was doing real work.
 
 ---
 
-## 7. Responsible Use
+## 7. AI Collaboration
 
-**Where could this system cause real world harm if used carelessly?**  
-Think about wrong answers, missing information, or over trusting the LLM.
+This project was built with significant AI assistance throughout.
 
- A developer could trust a Mode 1 answer that sounds correct but is based on general knowledge not the actual codebase, leading to wrong endpoint paths, wrong environment variable names, or misconfigured deployments.
+One instance where AI gave a genuinely helpful suggestion: when designing the agentic pipeline, the suggestion to separate query expansion from synthesis into two distinct Gemini calls was the right call. It made each step independently debuggable and made the observable pipeline much cleaner than a single combined prompt would have been.
 
-**What instructions would you give real developers who want to use DocuBot safely?**  
-Write 2 to 4 short bullet points.
-
-- Always verify answers against the actual source files especially for security related config like AUTH_SECRET_KEY
-- Never use Mode 1 for project specific questions since it has no access to your actual documentation
-- Treat LOW confidence scores as a signal to check the docs manually before acting
-- Keep documentation up to date since DocuBot is only as accurate as the files in the docs folder
+One instance where the suggestion was flawed: early on, the generated docubot.py loaded documents from a hardcoded articles/ folder and passed them as a list of tuples. When Streamlit was introduced, the code assumed documents would always come from the folder and broke when files were passed directly from the uploader through session state. The fix required rethinking the constructor to accept documents either from a folder or directly as a parameter — something the original suggestion did not account for.
 
 ---
+
+## 8. Responsible Use
+
+The system could cause harm if a user treats the cited summary as a complete or authoritative answer without checking the source files. The citations make the evidence traceable but do not guarantee the uploaded articles themselves are accurate or representative.
+
+- Always check the source files the system cites before acting on an answer
+- Upload multiple perspectives on a topic rather than a single source
+- Treat "no relevant content found" as useful information, not a system failure
+- Do not use this system as a substitute for reading the original articles on high-stakes decisions
