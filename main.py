@@ -80,12 +80,16 @@ def run_naive_llm_mode(bot, has_llm):
     queries, label = get_query_or_use_samples()
     print(f"\nRunning naive LLM mode on {label}...\n")
 
-    all_text = bot.full_corpus_text()
+    all_text = "\n\n".join(text for _, text in bot.documents)
 
     for query in queries:
         print("=" * 60)
         print(f"Question: {query}\n")
-        answer = bot.llm_client.naive_answer_over_full_docs(query, all_text)
+        prompt = (
+            f"Using the following documents, answer this question:\n\n"
+            f"{all_text}\n\nQuestion: {query}"
+        )
+        answer = bot.llm_client.generate(prompt)
         print("Answer:")
         print(answer)
         print()
@@ -102,7 +106,13 @@ def run_retrieval_only_mode(bot):
     for query in queries:
         print("=" * 60)
         print(f"Question: {query}\n")
-        answer = bot.answer_retrieval_only(query)
+        snippets = bot.retrieve(query)
+        if not snippets:
+            answer = "No relevant passages found."
+        else:
+            answer = "\n\n".join(
+                f"[{fname}]\n{text}" for fname, text, score in snippets
+            )
         print("Retrieved snippets:")
         print(answer)
         print()
@@ -123,7 +133,8 @@ def run_rag_mode(bot, has_llm):
     for query in queries:
         print("=" * 60)
         print(f"Question: {query}\n")
-        answer = bot.answer_rag(query)
+        result = bot.answer_with_citations(query)
+        answer = result["answer"]
         print("Answer:")
         print(answer)
         print()

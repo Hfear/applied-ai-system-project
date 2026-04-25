@@ -255,7 +255,9 @@ class DocuBot:
         otherwise falls back to word-overlap scoring.
         """
         if self.semantic_index:
-            return self._semantic_score(query, top_k)
+            results = self._semantic_score(query, top_k)
+            _logger_module.log_snippets(results)
+            return results
 
         # Word-overlap fallback
         scored: list[tuple[int, str, str]] = []
@@ -267,11 +269,13 @@ class DocuBot:
                 scored.append((score, filename, paragraph))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [
+        results = [
             (filename, paragraph, score)
             for score, filename, paragraph in scored[:top_k]
             if score >= 2
         ]
+        _logger_module.log_snippets(results)
+        return results
 
     # ------------------------------------------------------------------
     # Query expansion
@@ -283,6 +287,8 @@ class DocuBot:
         Returns (expanded_query_string, list_of_extra_terms).
         Falls back to (original_query, []) if LLM is unavailable.
         """
+        _logger_module.log_query("expand_query", query)
+
         if self.llm_client is None:
             return query, []
 
@@ -350,7 +356,7 @@ class DocuBot:
                 answer = self.llm_client.generate(prompt)
             except Exception as exc:
                 _logger_module.log_error("synthesise", exc)
-                answer = "⚠️ Gemini unavailable — showing raw passages:\n\n" + context
+                answer = "⚠️ LLM unavailable — showing raw passages:\n\n" + context
         else:
             answer = "⚠️ No LLM configured — showing raw passages:\n\n" + context
 
@@ -400,7 +406,8 @@ class DocuBot:
         if not self.llm_client:
             return "⚠️ LLM unavailable — cannot analyse arguments."
 
-        snippets = self.retrieve(claim, top_k=top_k)
+        expanded_claim, _ = self.expand_query(claim)
+        snippets = self.retrieve(expanded_claim, top_k=top_k)
         if not snippets:
             return (
                 "The uploaded articles do not contain enough evidence "
@@ -440,11 +447,8 @@ class DocuBot:
             "raw_summary": str,
         }
         """
-        _logger_module.log_query("answer_with_citations", query)
-
         expanded_query, expanded_terms = self.expand_query(query)
         snippets = self.retrieve(expanded_query, top_k=5)
-        _logger_module.log_snippets(snippets)
 
         sources_searched = list(dict.fromkeys(f for f, _, _ in snippets))
 
